@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, GeoJSON } from 'react-leaflet';
 import Papa from 'papaparse';
 import {
   Vote, TrendingUp, Swords, ArrowLeft, Trophy, BarChart3,
-  Info, Stamp, Map, Landmark, MousePointerClick,
+  Info, Stamp, Flag, MapPin,
 } from 'lucide-react';
 import './App.css';
 
@@ -23,8 +23,17 @@ const SYMBOL_COLORS = {
 
 const DEFAULT_COLOR = '#64748b';
 
+// Available symbol images in public/symbols/
+const SYMBOL_IMAGES = ['ধানের শীষ', 'দাঁড়িপাল্লা', 'শাপলা কলি', 'রিক্সা'];
+
+function getSymbolImage(name) {
+  if (!SYMBOL_IMAGES.includes(name)) return null;
+  return `${import.meta.env.BASE_URL}symbols/${name}.png`;
+}
+
 // View modes
 const VIEW_MODES = [
+  { id: 'winner', label: 'বিজয়ী', icon: Flag },
   { id: 'total_votes', label: 'মোট ভোট', icon: Vote },
   { id: 'winning_margin', label: 'ব্যবধান', icon: TrendingUp },
   { id: 'competition', label: 'প্রতিযোগিতা', icon: Swords },
@@ -78,7 +87,7 @@ function App() {
   const [electionData, setElectionData] = useState(null);
   const [selectedRegion, setSelectedRegion] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState('total_votes');
+  const [viewMode, setViewMode] = useState('winner');
 
   // Load data
   useEffect(() => {
@@ -158,6 +167,11 @@ function App() {
       let fillOpacity = 0.75;
 
       switch (viewMode) {
+        case 'winner': {
+          fillColor = getSymbolColor(region.winner.name);
+          fillOpacity = 0.82;
+          break;
+        }
         case 'total_votes': {
           const { min, max } = dataRanges.totalVotes;
           fillColor = getGradientColor(region.totalVotes, min, max, GRADIENTS.total_votes);
@@ -196,6 +210,9 @@ function App() {
     (region) => {
       let extra = '';
       switch (viewMode) {
+        case 'winner':
+          extra = `<br/>বিজয়ী: ${region.winner.name} (${toBn(region.winner.percentage)}%)`;
+          break;
         case 'total_votes':
           extra = `<br/>মোট ভোট: ${formatNumber(region.totalVotes)}`;
           break;
@@ -239,35 +256,64 @@ function App() {
     [electionData, styleFeature, getTooltipContent]
   );
 
-  // Gradient legend config per mode
-  const gradientLegendConfig = useMemo(() => {
-    if (!dataRanges.totalVotes) return null;
-    switch (viewMode) {
-      case 'total_votes':
-        return {
-          title: 'মোট ভোট',
-          gradient: GRADIENTS.total_votes,
-          minLabel: formatNumber(dataRanges.totalVotes.min),
-          maxLabel: formatNumber(dataRanges.totalVotes.max),
-        };
-      case 'winning_margin':
-        return {
-          title: 'ব্যবধান',
-          gradient: GRADIENTS.winning_margin,
-          minLabel: `${toBn(dataRanges.winningMargin.min.toFixed(1))}%`,
-          maxLabel: `${toBn(dataRanges.winningMargin.max.toFixed(1))}%`,
-        };
-      case 'competition':
-        return {
-          title: 'প্রতিযোগিতার মাত্রা',
-          gradient: GRADIENTS.competition,
-          minLabel: 'কম',
-          maxLabel: 'বেশি',
-        };
-      default:
-        return null;
+  // Legend config per mode
+  const legendConfig = useMemo(() => {
+    if (!electionData || !dataRanges.totalVotes) return null;
+    if (viewMode === 'winner') {
+      const winnerSymbols = [...new Set(Object.values(electionData).map((r) => r.winner.name))];
+      return {
+        type: 'symbol',
+        title: 'বিজয়ী প্রতীক',
+        items: winnerSymbols.map((name) => ({ name, color: getSymbolColor(name) })),
+      };
     }
-  }, [viewMode, dataRanges]);
+    const configs = {
+      total_votes: {
+        title: 'মোট ভোট',
+        gradient: GRADIENTS.total_votes,
+        minLabel: formatNumber(dataRanges.totalVotes.min),
+        maxLabel: formatNumber(dataRanges.totalVotes.max),
+      },
+      winning_margin: {
+        title: 'ব্যবধান',
+        gradient: GRADIENTS.winning_margin,
+        minLabel: `${toBn(dataRanges.winningMargin.min.toFixed(1))}%`,
+        maxLabel: `${toBn(dataRanges.winningMargin.max.toFixed(1))}%`,
+      },
+      competition: {
+        title: 'প্রতিযোগিতার মাত্রা',
+        gradient: GRADIENTS.competition,
+        minLabel: 'কম',
+        maxLabel: 'বেশি',
+      },
+    };
+    return { type: 'gradient', ...configs[viewMode] };
+  }, [viewMode, dataRanges, electionData]);
+
+  // National aggregates for leaderboard
+  const nationalLeaderboard = useMemo(() => {
+    if (!electionData) return [];
+    const symbolMap = {};
+    const regions = Object.values(electionData);
+    for (const region of regions) {
+      for (const symbol of region.symbols) {
+        if (!symbolMap[symbol.name]) {
+          symbolMap[symbol.name] = { name: symbol.name, totalVotes: 0, regionsWon: 0 };
+        }
+        symbolMap[symbol.name].totalVotes += symbol.votes;
+      }
+      symbolMap[region.winner.name].regionsWon += 1;
+    }
+    return Object.values(symbolMap).sort((a, b) => b.totalVotes - a.totalVotes);
+  }, [electionData]);
+
+  // Region list for quick navigation
+  const regionList = useMemo(() => {
+    if (!electionData) return [];
+    return Object.values(electionData)
+      .sort((a, b) => a.regionId - b.regionId)
+      .map((r) => ({ id: r.regionId, name: r.regionName, winner: r.winner.name }));
+  }, [electionData]);
 
   const selectedData = selectedRegion && electionData ? electionData[selectedRegion] : null;
 
@@ -333,19 +379,32 @@ function App() {
           </MapContainer>
 
           {/* Legend */}
-          {gradientLegendConfig && (
+          {legendConfig && (
             <div className="map-legend">
-              <h4>{gradientLegendConfig.title}</h4>
-              <div
-                className="gradient-bar"
-                style={{
-                  background: `linear-gradient(to right, ${gradientLegendConfig.gradient.join(', ')})`,
-                }}
-              />
-              <div className="gradient-labels">
-                <span>{gradientLegendConfig.minLabel}</span>
-                <span>{gradientLegendConfig.maxLabel}</span>
-              </div>
+              <h4>{legendConfig.title}</h4>
+              {legendConfig.type === 'gradient' ? (
+                <>
+                  <div
+                    className="gradient-bar"
+                    style={{
+                      background: `linear-gradient(to right, ${legendConfig.gradient.join(', ')})`,
+                    }}
+                  />
+                  <div className="gradient-labels">
+                    <span>{legendConfig.minLabel}</span>
+                    <span>{legendConfig.maxLabel}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="symbol-legend-list">
+                  {legendConfig.items.map((item) => (
+                    <div key={item.name} className="legend-item">
+                      <span className="legend-color" style={{ background: item.color }} />
+                      <span>{item.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -364,12 +423,20 @@ function App() {
 
               {/* Winner */}
               <div className="winner-banner">
-                <div
-                  className="winner-color-dot"
-                  style={{ backgroundColor: getSymbolColor(selectedData.winner.name) }}
-                >
-                  <Trophy size={20} color="#fff" />
-                </div>
+                {getSymbolImage(selectedData.winner.name) ? (
+                  <img
+                    className="winner-symbol-img"
+                    src={getSymbolImage(selectedData.winner.name)}
+                    alt={selectedData.winner.name}
+                  />
+                ) : (
+                  <div
+                    className="winner-color-dot"
+                    style={{ backgroundColor: getSymbolColor(selectedData.winner.name) }}
+                  >
+                    <Trophy size={20} color="#fff" />
+                  </div>
+                )}
                 <div className="winner-info">
                   <h3>{selectedData.winner.name}</h3>
                   <div
@@ -412,6 +479,11 @@ function App() {
                 {selectedData.symbols.slice(0, 15).map((symbol, i) => (
                   <div key={symbol.name} className="result-item">
                     <span className="result-rank">{toBn(i + 1)}</span>
+                    {getSymbolImage(symbol.name) ? (
+                      <img className="result-symbol-img" src={getSymbolImage(symbol.name)} alt={symbol.name} />
+                    ) : (
+                      <span className="result-symbol-dot" style={{ background: getSymbolColor(symbol.name) }} />
+                    )}
                     <div className="result-bar-wrapper">
                       <div className="result-name">
                         <span>{symbol.name}</span>
@@ -438,69 +510,76 @@ function App() {
               </div>
             </>
           ) : (
-            <div className="sidebar-about">
-              <div className="about-header">
-                <h2><Info size={16} /> তথ্য সম্পর্কে</h2>
+            <div className="sidebar-national">
+              {/* National summary header */}
+              <div className="sidebar-header">
+                <h2><BarChart3 size={16} /> জাতীয় ফলাফল</h2>
+                <p>সকল বিভাগের সমন্বিত ফলাফল</p>
               </div>
 
+              {/* Quick region navigation */}
+              <div className="region-nav">
+                <h4><MapPin size={13} /> বিভাগ নির্বাচন</h4>
+                <div className="region-nav-grid">
+                  {regionList.map((r) => (
+                    <button
+                      key={r.id}
+                      className="region-nav-btn"
+                      onClick={() => setSelectedRegion(r.id)}
+                    >
+                      <span
+                        className="region-nav-dot"
+                        style={{ background: getSymbolColor(r.winner) }}
+                      />
+                      {r.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* National leaderboard */}
+              <div className="national-leaderboard">
+                <h4><Trophy size={13} /> জাতীয় প্রতীক র‍্যাংকিং (শীর্ষ ১০)</h4>
+                {nationalLeaderboard.slice(0, 10).map((symbol, i) => (
+                  <div key={symbol.name} className="result-item">
+                    <span className="result-rank">{toBn(i + 1)}</span>
+                    {getSymbolImage(symbol.name) ? (
+                      <img className="result-symbol-img" src={getSymbolImage(symbol.name)} alt={symbol.name} />
+                    ) : (
+                      <span className="result-symbol-dot" style={{ background: getSymbolColor(symbol.name) }} />
+                    )}
+                    <div className="result-bar-wrapper">
+                      <div className="result-name">
+                        <span>{symbol.name}</span>
+                        <span className="pct">
+                          {symbol.regionsWon > 0 && (
+                            <span className="regions-won-badge">{toBn(symbol.regionsWon)} বিভাগ</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="result-bar">
+                        <div
+                          className="result-bar-fill"
+                          style={{
+                            width: `${(symbol.totalVotes / nationalLeaderboard[0].totalVotes) * 100}%`,
+                            backgroundColor: getSymbolColor(symbol.name),
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <span className="result-votes">{formatNumber(symbol.totalVotes)}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Condensed about */}
               <div className="about-section">
-                <h3>সারসংক্ষেপ</h3>
+                <h3><Info size={13} /> তথ্য</h3>
                 <p>
-                  এই ইন্টারেক্টিভ মানচিত্রে <strong>বাংলাদেশ জাতীয় সংসদ নির্বাচন
-                  ২০২৬</strong>-এর ফলাফল প্রদর্শিত হচ্ছে, যেখানে বাংলাদেশের ৮টি
-                  প্রশাসনিক বিভাগের ভোটের বিন্যাস দেখানো হয়েছে।
+                  <strong>বাংলাদেশ জাতীয় সংসদ নির্বাচন ২০২৬</strong>-এর ফলাফল।
+                  ৮টি প্রশাসনিক বিভাগের ভোটের বিন্যাস দেখানো হয়েছে।
+                  বিস্তারিত দেখতে মানচিত্রে বিভাগে ক্লিক করুন বা উপরের বোতাম ব্যবহার করুন।
                 </p>
-              </div>
-
-              <div className="about-section">
-                <h3><Stamp size={13} /> প্রতীক কী?</h3>
-                <p>
-                  বাংলাদেশের নির্বাচনে প্রতিটি রাজনৈতিক দল বা স্বতন্ত্র প্রার্থীকে
-                  একটি নির্দিষ্ট <strong>নির্বাচনী প্রতীক</strong> দেওয়া হয় যা
-                  ব্যালট পেপারে প্রদর্শিত হয়। ভোটাররা তাদের পছন্দের প্রার্থীর
-                  প্রতীকে সিল মেরে ভোট দেন। প্রধান প্রতীকসমূহ:
-                </p>
-                <ul className="symbol-list">
-                  <li><span className="sym-dot" style={{background: '#22c55e'}}></span><strong>ধানের শীষ</strong></li>
-                  <li><span className="sym-dot" style={{background: '#f59e0b'}}></span><strong>দাঁড়িপাল্লা</strong></li>
-                  <li><span className="sym-dot" style={{background: '#ef4444'}}></span><strong>হাতপাখা</strong></li>
-                  <li><span className="sym-dot" style={{background: '#8b5cf6'}}></span><strong>শাপলা কলি</strong></li>
-                  <li><span className="sym-dot" style={{background: '#06b6d4'}}></span><strong>রিক্সা</strong></li>
-                </ul>
-              </div>
-
-              <div className="about-section">
-                <h3><Map size={13} /> মানচিত্র ভিউ</h3>
-                <ul className="view-desc-list">
-                  <li>
-                    <strong>মোট ভোট</strong> — প্রতিটি বিভাগে প্রদত্ত মোট ভোটের সংখ্যা
-                    দেখায়। গাঢ়/উষ্ণ রঙ বেশি ভোটার উপস্থিতি নির্দেশ করে। ঢাকা ও
-                    চট্টগ্রাম বিভাগে সবচেয়ে বেশি ভোট পড়েছে।
-                  </li>
-                  <li>
-                    <strong>ব্যবধান</strong> — প্রতিটি বিভাগে ১ম ও ২য় স্থানের
-                    প্রতীকের মধ্যে শতাংশের পার্থক্য দেখায়। বেশি ব্যবধান মানে
-                    নিশ্চিত জয়; কম ব্যবধান মানে কঠিন প্রতিদ্বন্দ্বিতা।
-                  </li>
-                  <li>
-                    <strong>প্রতিযোগিতা</strong> — রানার-আপের ভোট ও বিজয়ীর ভোটের
-                    অনুপাত ব্যবহার করে প্রতিযোগিতার মাত্রা পরিমাপ করে। উচ্চ মান
-                    তীব্র প্রতিযোগিতা নির্দেশ করে; নিম্ন মান একতরফা ফলাফল নির্দেশ করে।
-                  </li>
-                </ul>
-              </div>
-
-              <div className="about-section">
-                <h3><Landmark size={13} /> বিভাগসমূহ</h3>
-                <p>
-                  বাংলাদেশ ৮টি প্রশাসনিক বিভাগে বিভক্ত: বরিশাল, চট্টগ্রাম,
-                  ঢাকা, খুলনা, ময়মনসিংহ, রাজশাহী, রংপুর এবং সিলেট।
-                  প্রতিটি বিভাগে এর সীমানার মধ্যে সকল নির্বাচনী এলাকার ফলাফল একত্রিত করা হয়েছে।
-                </p>
-              </div>
-
-              <div className="about-cta">
-                <MousePointerClick size={14} /> বিস্তারিত ফলাফল দেখতে মানচিত্রে যেকোনো বিভাগে ক্লিক করুন।
               </div>
             </div>
           )}
