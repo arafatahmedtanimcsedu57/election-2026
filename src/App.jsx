@@ -83,8 +83,8 @@ function App() {
   // Load data
   useEffect(() => {
     Promise.all([
-      fetch('/bangladesh.geojson').then((r) => r.json()),
-      fetch('/region_symbol_wise_vote_percentage.csv').then((r) => r.text()),
+      fetch(`${import.meta.env.BASE_URL}bangladesh.geojson`).then((r) => r.json()),
+      fetch(`${import.meta.env.BASE_URL}region_symbol_wise_vote_percentage.csv`).then((r) => r.text()),
     ]).then(([geo, csvText]) => {
       setGeoData(geo);
 
